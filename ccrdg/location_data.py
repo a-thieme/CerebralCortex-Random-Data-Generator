@@ -85,7 +85,7 @@ def gen_location_data(CC, study_name, user_id, gps_stream_name, location_stream_
         start_time2 = start_time
         for row in range(1,total_minutes,randrange(1,5)): # range(total_data, 1, -1):
             slocation = random.choice(semantic_locations)
-            end_time2 = start_time2 + timedelta(minutes=row)
+            end_time2 = start_time2 + timedelta(minutes=row+1)
             window = (start_time2, end_time2)
             #timestamp = start_time2
             localtime = start_time2 + timedelta(hours=5)
