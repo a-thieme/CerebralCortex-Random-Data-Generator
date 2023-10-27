@@ -41,15 +41,18 @@ def gen_accel_gyro_data(CC, study_name, user_id, stream_name, version=1, frequen
     timestamp = start_time
 
     sqlContext = get_or_create_sc("sqlContext")
-    total_hours = round(((end_time-start_time).total_seconds()))*frequency
-    for row in range(total_hours):
+    total_rows = round((end_time-start_time).total_seconds())*frequency
+    for row in range(total_rows):
         x = round(random.uniform(-2,2),8)
         y = round(random.uniform(-2,2),8)
         z = round(random.uniform(-2,2),8)
-        timestamp = timestamp + timedelta(milliseconds=1)
         localtime = timestamp - timedelta(hours=5)
         sample_data.append((timestamp, localtime, user_id, version, x, y, z))
+        timestamp = timestamp + timedelta(milliseconds=1)
+
     df = sqlContext.createDataFrame(sample_data, column_name)
+    print(f'accel gyro data: length: {df.count()}')
+    df.show(10)
 
     stream_metadata = Metadata()
     stream_metadata.set_study_name(study_name).set_name(stream_name).set_description("wrist watch sensor sample data stream.") \
@@ -73,6 +76,6 @@ def gen_accel_gyro_data(CC, study_name, user_id, stream_name, version=1, frequen
     stream_metadata.is_valid()
 
     ds = DataStream(df, stream_metadata)
-    CC.save_stream(ds)
+    CC.save_stream(ds, overwrite=True)
 
 

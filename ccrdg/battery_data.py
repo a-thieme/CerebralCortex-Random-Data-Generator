@@ -43,14 +43,15 @@ def gen_battery_data(CC, study_name, user_id, stream_name, version=1, start_time
     temperature = 70
     sqlContext = get_or_create_sc("sqlContext")
     total_data = round((end_time-start_time).total_seconds())
-    for row in range(total_data, 1, -1):
-        sample = float(sample - 0.01)
-        timestamp = timestamp + timedelta(0, 1)
+    for row in range(total_data):
+        sample = sample - 0.01
         localtime = timestamp - timedelta(hours=5)
         sample_data.append((timestamp, localtime, user_id, version, sample, voltage, temperature))
+        timestamp = timestamp + timedelta(seconds=1)
 
     df = sqlContext.createDataFrame(sample_data, column_name)
-    df.show(5)
+    print(f'battery_data: length: {df.count()}')
+    df.show(10)
     stream_metadata = Metadata()
     stream_metadata.set_study_name(study_name).set_name(stream_name).set_description("battery sample data stream.") \
         .add_dataDescriptor(
@@ -73,6 +74,6 @@ def gen_battery_data(CC, study_name, user_id, stream_name, version=1, start_time
     stream_metadata.is_valid()
 
     ds = DataStream(df, stream_metadata)
-    CC.save_stream(ds)
+    CC.save_stream(ds, overwrite=True)
 
 
