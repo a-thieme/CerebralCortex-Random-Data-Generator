@@ -1,46 +1,117 @@
 import datetime
 
-from ccrdg.battery_data import gen_battery_data
-from ccrdg.accel_gyro_data import gen_accel_gyro_data
-from ccrdg.location_data import gen_location_data#gen_location_datastream, gen_semantic_location_datastream
+import generator
+
+import socket
+import json
+
+import time
+
 import argparse
-from cerebralcortex.kernel import Kernel
 
+class Sender:
+    def __init__(self, port):
+        self.conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.conn.connect(('localhost', port))
 
-def run():
-    parser = argparse.ArgumentParser(description='CerebralCortex Random Data Generator.')
-    parser.add_argument("-uid", "--user_id", help="UUID of a user. Defaul UUID of a user is 00000000-e19c-3956-9db2-5459ccadd40c", default="00000000-e19c-3956-9db2-5459ccadd40c")
-    parser.add_argument("-sn", "--study_name", help="Name of the study. Default is mguard.", default="mguard")
-    parser.add_argument("-st", "--start_time", help="Start time of data. Input format is '2022-05-08 21:08:10', '%Y-%m-%d %H:%M:%S'",default=datetime.datetime.now())
-    parser.add_argument("-et", "--end_time", help="End time of data. Input format is '2022-05-08 21:08:10', '%Y-%m-%d %H:%M:%S'",default=datetime.datetime.now())
+    def send(self, payload):
+        self.conn.send(payload.encode('utf-8'))
 
+    def close(self):
+        self.conn.close()
 
+def get_sender():
+    # todo: make this port configurable at runtime
+    port = 15000
+    print('Sender initialize')
+    sender = Sender(port)
+    return sender
 
+def send_stream(data_to_send, sender_obj):
 
-    args = vars(parser.parse_args())
+    serialize_data = json.dumps(data_to_send)
 
-    study_name = str(args["study_name"]).strip()
-    user_id = str(args["user_id"]).strip()
-    start_time = datetime.datetime.strptime(args["start_time"], '%Y-%m-%d %H:%M:%S')
-    end_time = datetime.datetime.strptime(args["end_time"], '%Y-%m-%d %H:%M:%S')
+    ack = ''
+    while not ack:
+        sender_obj.conn.send(serialize_data.encode())
+        ack = sender_obj.conn.recv(1024).decode()
 
+    print("From server: ", ack)
+    sender_obj.conn.close()
 
+def format_time(dt:datetime.datetime):
+    return int(time.mktime(dt.timetuple()))
 
-    CC = Kernel(cc_configs="default", study_name=study_name, new_study=True)
+def main(rows_per_batch = 5, batches = 5, batch_wait = 0, stream_wait = 0):
+    """
+     Wrapper code for data generation and transport to producer via socket
+     @var batches int number of times we will generate the data and send it
+    """
+    parser = argparse.ArgumentParser(
+        prog='Data Generator',
+        description='Random Data Generator for mGuard System',
+    )
+    parser.add_argument('-b', '--batches', action='store')
+    parser.add_argument('-r', '--rows-per-batch', action='store')
+    parser.add_argument('-bw', '--wait-between-batch', action='store')
+    parser.add_argument('-sw', '--wait-between-stream', action='store')
+    a = parser.parse_args()
 
+    if a.batches is not None:
+        batches = int(a.batches)
 
-    battery_stream_name = "org.md2k--{}--{}--battery--phone".format(study_name,user_id)
-    gps_stream_name = "org.md2k--{}--{}--gps--phone".format(study_name,user_id)
-    semantic_location_stream_name = "org.md2k--{}--{}--data_analysis--gps_episodes_and_semantic_location".format(study_name,user_id)
-    accel_stream_name = "org.md2k.phonesensor--{}--{}--accelerometer--phone".format(study_name,user_id)
-    gyro_stream_name = "org.md2k.phonesensor--{}--{}--gyroscope--phone".format(study_name,user_id)
+    if a.rows_per_batch is not None:
+        rows_per_batch = int(a.rows_per_batch)
 
+    if a.wait_between_batch is not None:
+        batch_wait = int(a.wait_between_batch)
 
-    gen_location_data(CC, study_name=study_name, user_id=user_id, gps_stream_name=gps_stream_name, location_stream_name=semantic_location_stream_name, start_time=start_time, end_time=end_time)
+    if a.wait_between_stream is not None:
+        stream_wait = int(a.wait_between_stream)
 
-    gen_battery_data(CC, study_name=study_name, user_id=user_id, stream_name=battery_stream_name, start_time=start_time, end_time=end_time)
-    gen_accel_gyro_data(CC, study_name=study_name, user_id=user_id, stream_name=accel_stream_name, start_time=start_time, end_time=end_time)
-    gen_accel_gyro_data(CC, study_name=study_name, user_id=user_id, stream_name=gyro_stream_name, start_time=start_time, end_time=end_time)
+    print(f'rpb {rows_per_batch}')
+    print(f'batch {batches}')
+    print(f'bwait {batch_wait}')
+    print(f'swait {stream_wait}')
 
-if __name__ == "__main__":
-    run()
+    working_start = datetime.datetime.utcnow().replace(microsecond=0)
+    delta_time = datetime.timedelta(seconds=rows_per_batch)
+    one_second = datetime.timedelta(seconds=1)
+
+    for batch_number in range(batches):
+        working_end = working_start + delta_time
+
+        print("Fetching data for formatted_start_time {} and formatted_end_time {}".format(format_time(working_start), format_time(working_end)))
+        cc_obj, streams = generator.get_cc(working_start, working_end)
+
+        for stream in streams:
+            stream_name = streams[stream]
+
+            metadata =  cc_obj.get_stream_metadata_by_name(stream_name).to_json()
+            payload = cc_obj.get_stream(stream_name).toPandas()
+
+            data_to_send = {'header': metadata, 'payload': payload.to_csv()}
+
+            # uncomment for debugging
+            data1 = payload
+            data1.to_csv(str(batch_number) + '_' + stream_name, index=False)
+
+            print("Sending data for stream name {}".format(stream_name))
+            # print("Metadata of the stream {} = {}".format(stream_name, metadata))
+            
+            # sender_obj = get_sender()
+            # send_stream(data_to_send, sender_obj)
+            
+            time.sleep(stream_wait)
+
+        print("Sending data for batch: {}, completed".format(batch_number))
+
+        print("Sleeping for {} second sending batch data".format(batch_wait))
+        time.sleep(batch_wait)
+        working_start = working_end + one_second
+
+    print ("Sending data for all the batch completed")
+
+if __name__ == '__main__':
+
+    main()
